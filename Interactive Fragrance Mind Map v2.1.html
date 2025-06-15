@@ -1,0 +1,937 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Fragrance Mind Map v2.1</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+        }
+        .graph-container {
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+            cursor: move;
+            background: #f9fafb;
+        }
+        .node circle {
+            /* stroke color is now controlled by d3.js */
+            stroke-width: 2.5px;
+            transition: transform 0.2s ease-in-out;
+        }
+        .node:hover circle {
+            transform: scale(1.2);
+        }
+        .node text {
+            pointer-events: none;
+            font-size: 12px;
+            font-weight: 500;
+            fill: #111827;
+            text-anchor: middle;
+            paint-order: stroke;
+            stroke: #ffffff;
+            stroke-width: 3.5px;
+            stroke-linecap: butt;
+            stroke-linejoin: miter;
+        }
+        .node text.ingredient-label {
+            font-size: 10px;
+            font-weight: 400;
+            fill: #4b5563;
+        }
+        .link {
+            stroke-opacity: 0.5;
+            stroke-width: 2.5px; /* Thicker for easier clicking */
+            cursor: pointer;
+            transition: stroke-opacity 0.2s;
+        }
+        .link:hover {
+            stroke-opacity: 1;
+        }
+        .link.high-contrast {
+            stroke-dasharray: 4 2;
+            stroke: #e11d48;
+        }
+        #tooltip {
+            position: absolute;
+            opacity: 0;
+            background-color: #1f2937;
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            pointer-events: none;
+            transition: opacity 0.3s;
+            max-width: 250px;
+            z-index: 50;
+        }
+        .context-menu {
+            position: absolute;
+            display: none;
+            flex-direction: column;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+            border: 1px solid #e5e7eb;
+            z-index: 40;
+            overflow: hidden;
+        }
+        .context-menu button {
+            background: none; border: none; padding: 10px 15px; width: 100%; text-align: left;
+            font-size: 14px; cursor: pointer; border-bottom: 1px solid #f3f4f6;
+        }
+        .context-menu button:hover { background-color: #f9fafb; }
+        .context-menu button:last-child { border-bottom: none; }
+        .modal {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.5); display: flex; justify-content: center; align-items: center;
+            z-index: 1000;
+        }
+        .modal-content {
+            background-color: white; padding: 2rem; border-radius: 0.75rem;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); width: 90%; max-width: 500px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .color-palette {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(30px, 1fr));
+            gap: 10px;
+            margin-bottom: 1rem;
+        }
+        .color-swatch {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid transparent;
+        }
+        .color-swatch:hover, .color-swatch.selected {
+             border-color: #3b82f6;
+        }
+        .help-content ul {
+            list-style-type: disc;
+            padding-left: 1.5rem;
+            margin-top: 0.5rem;
+            margin-bottom: 1rem;
+        }
+         .help-content li {
+            margin-bottom: 0.5rem;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 h-screen w-screen flex flex-col items-center justify-center p-4">
+
+    <div class="w-full h-full bg-white rounded-xl shadow-lg flex flex-col border border-gray-200 overflow-hidden">
+
+        <header class="p-4 border-b border-gray-200 bg-gray-50 flex flex-wrap items-center gap-4 z-10">
+            <div class="flex-grow">
+                <h1 class="text-xl font-bold text-gray-800">Fragrance Mind Map</h1>
+                <p class="text-sm text-gray-500">A tool for creative scent design.</p>
+            </div>
+             <div class="flex items-center gap-2">
+                <label for="elasticity-slider" class="text-sm font-medium text-gray-700">Elasticity:</label>
+                <input type="range" id="elasticity-slider" min="0.1" max="2" step="0.1" value="0.8" class="w-24">
+            </div>
+            <div class="flex items-center gap-2">
+                <label for="friction-slider" class="text-sm font-medium text-gray-700">Friction:</label>
+                <input type="range" id="friction-slider" min="0.1" max="0.99" step="0.01" value="0.4" class="w-24">
+            </div>
+             <div class="relative">
+                <input type="text" id="search-input" placeholder="Search nodes..." class="w-48 px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm">
+                <div id="search-results" class="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-b-md shadow-lg max-h-60 overflow-y-auto z-20 hidden"></div>
+            </div>
+            <div class="flex items-center gap-2">
+                 <button id="import-btn" class="px-3 py-2 bg-gray-600 text-white font-semibold rounded-md shadow-sm hover:bg-gray-700">Import</button>
+                 <input type="file" id="import-file" class="hidden" accept=".json">
+                 <button id="export-btn" class="px-3 py-2 bg-blue-600 text-white font-semibold rounded-md shadow-sm hover:bg-blue-700">Export</button>
+            </div>
+            <div class="flex items-center gap-1">
+                 <button id="zoom-in-btn" class="p-2 bg-gray-200 rounded-md hover:bg-gray-300"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z"/></svg></button>
+                 <button id="zoom-out-btn" class="p-2 bg-gray-200 rounded-md hover:bg-gray-300"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M4 8a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7A.5.5 0 0 1 4 8z"/></svg></button>
+            </div>
+             <button id="help-btn" class="px-4 py-2 bg-gray-200 text-gray-800 font-semibold rounded-md shadow-sm hover:bg-gray-300">Help</button>
+            <button id="reset-btn" class="px-4 py-2 bg-red-600 text-white font-semibold rounded-md shadow-sm hover:bg-red-700">Reset</button>
+        </header>
+
+        <div class="flex-grow relative">
+            <div id="graph-container" class="w-full h-full"></div>
+        </div>
+    </div>
+
+    <div id="tooltip"></div>
+    <div id="context-menu" class="context-menu"></div>
+    <div id="modal-container" class="modal hidden"></div>
+
+    <script type="module">
+        // --- DATA ---
+        const initialNodes = [
+            { id: 'Fresh', group: 1, isFamily: true, description: 'The family of clean, bright, and uplifting scents.' },
+            { id: 'Floral', group: 2, isFamily: true, description: 'The family of scents derived from flowers.' },
+            { id: 'Amber', group: 3, isFamily: true, description: 'A family of rich, warm, and sensual scents.' },
+            { id: 'Woody', group: 4, isFamily: true, description: 'Scents centered on the aroma of woods and mosses.' },
+            { id: 'Gourmand', group: 5, isFamily: true, description: 'A family of "edible" or dessert-like scents.' },
+            { id: 'Animalic', group: 7, isFamily: true, description: 'Deep, complex, and musky notes traditionally from animal sources, now almost exclusively recreated with synthetics.'},
+
+            { id: 'Citrus', group: 1, isSubFamily: true, subGroup: 'Citrus', description: 'Zesty, sparkling notes from fruits like lemon, bergamot, and mandarin.' },
+            { id: 'Fruity', group: 1, isSubFamily: true, description: 'Sweet and ripe notes of non-citrus fruits like peach, apple, and berries.' },
+            { id: 'Green', group: 1, isSubFamily: true, subGroup: 'Green', description: 'The sharp, crisp scent of freshly cut grass and crushed leaves. Key molecules: cis-3-Hexenol, Galbanum.' },
+            { id: 'Water', group: 1, isSubFamily: true, description: 'Ozonic and marine scents that evoke sea spray, rain, or a cool ocean breeze.' },
+            { id: 'Aromatic', group: 1, isSubFamily: true, description: 'Clean, fresh scents from herbs like lavender, rosemary, and sage, often forming a Fougère accord.' },
+            { id: 'Herbal', group: 1, isSubFamily: true, subGroup: 'Green', description: 'Green, leafy, and sometimes medicinal notes from garden herbs like mint, basil, and thyme.' },
+            { id: 'Cooling', group: 1, isSubFamily: true, subGroup: 'Cooling', description: 'Icy, minty, and camphoraceous notes that create a physical cooling sensation.' },
+
+            { id: 'Soft Floral', group: 2, isSubFamily: true, description: 'Abstract florals made soft and often powdery through aldehydes and iris.' },
+            { id: 'Floral Amber', group: 2, isSubFamily: true, description: 'Heady flowers like orange blossom blended with sweet, warm spices.' },
+            { id: 'White Floral', group: 2, isSubFamily: true, description: 'Lush, opulent, and sometimes narcotic scents of white flowers like jasmine, tuberose, and gardenia.' },
+            { id: 'Rose', group: 2, isSubFamily: true, description: 'The classic scent of rose, which can range from fresh and dewy to rich and spicy.' },
+
+            { id: 'Soft Amber', group: 3, isSubFamily: true, description: 'Gentle, sensual fragrances where incense and ambrette add a soft touch to sweet spices.' },
+            { id: 'Woody Amber', group: 3, isSubFamily: true, description: 'Potent wood notes like patchouli and sandalwood woven with rich, spicy amber accords.' },
+            { id: 'Resins', group: 3, isSubFamily: true, description: 'Warm, smoky, and spiritual notes from tree saps like frankincense and myrrh.' },
+            { id: 'Balsamic', group: 3, isSubFamily: true, description: 'Sweet, warm, and comforting resinous notes like vanilla, benzoin, and tolu balsam.' },
+
+            { id: 'Mossy Woods', group: 4, isSubFamily: true, description: 'Earthy, velvety oakmoss and patchouli creating a classic "Chypre" accord.' },
+            { id: 'Dry Woods / Leather', group: 4, isSubFamily: true, description: 'Dry, often smoky scents of cedar, birch tar, and leather notes. Key molecules: Isobutyl Quinoline, Birch Tar.' },
+            { id: 'Oudh', group: 4, isSubFamily: true, description: 'A complex, rich, and powerful scent from agarwood, with animalic, woody, and sweet facets.' },
+
+            { id: 'Sweet Notes', group: 5, isSubFamily: true, description: 'Over-the-top sweet notes like vanilla and caramel. Key molecules: Ethyl Maltol, Furaneol.' },
+            { id: 'Spices', group: 5, isSubFamily: true, description: 'Warm or cold spices like cinnamon, clove, cardamom, and pink pepper.' },
+            { id: 'Coffee & Chocolate', group: 5, isSubFamily: true, description: 'Rich, dark, and bitter notes of roasted coffee beans and cacao.' },
+            { id: 'Savory', group: 5, isSubFamily: true, description: 'Unusual "edible" notes that are not sweet, often with roasted or sulfuric qualities.'},
+
+            { id: 'Bergamot', group: 1, isIngredient: true, subGroup: 'Citrus' },
+            { id: 'Grapefruit', group: 1, isIngredient: true, subGroup: 'Citrus', description: 'A bright, bitter, and zesty citrus note. Key molecule: Nootkatone.' },
+            { id: 'Galbanum', group: 1, isIngredient: true, subGroup: 'Green' },
+            { id: 'Petitgrain', group: 1, isIngredient: true, subGroup: 'Citrus', description: 'A bitter-green, citrusy, and woody note distilled from the leaves of the bitter orange tree.' },
+            { id: 'Lavender', group: 1, isIngredient: true, description: 'A clean, fresh, and calming aromatic floral note. Key molecule: Linalool, Linalyl Acetate.' },
+            { id: 'Watermelon / Calone', group: 1, isIngredient: true, description: 'A synthetic molecule with a fresh, watery, and melon-like scent.' },
+            { id: 'Mint', group: 1, isIngredient: true, subGroup: 'Cooling', description: 'A classic cooling and aromatic note. Key molecule: Menthol.' },
+            { id: 'Eucalyptus', group: 1, isIngredient: true, subGroup: 'Cooling', description: 'A sharp, camphoraceous, and medicinal cooling note. Key molecule: Eucalyptol.' },
+
+            { id: 'Jasmine Sambac', group: 2, isIngredient: true, description: 'A sweet, heady white floral with a slightly green, fruity, and indolic character.' },
+            { id: 'Tuberose', group: 2, isIngredient: true, description: 'A creamy, carnal, and opulent white floral with a potent sillage.' },
+            { id: 'Rose de Mai', group: 2, isIngredient: true, description: 'A classic, honeyed, and rich rose absolute. Key molecules: Citronellol, Geraniol.' },
+            { id: 'Geranium', group: 2, isIngredient: true, description: 'A rosy floral note with distinct minty and green facets.' },
+            { id: 'Violet', group: 2, isIngredient: true, description: 'A powdery, green, and slightly woody floral note. Key molecules: Ionones.'},
+
+            { id: 'Ambrette', group: 3, isIngredient: true, description: 'A plant-based musk from hibiscus seeds, with a soft, powdery, and slightly boozy scent.' },
+            { id: 'Labdanum', group: 3, isIngredient: true, description: 'A rich, complex, and leathery resin that is a key component of amber accords.' },
+            { id: 'Frankincense', group: 3, isIngredient: true, description: 'A fresh, piney, and balsamic resin with a distinct lemony top note.' },
+            { id: 'Myrrh', group: 3, isIngredient: true, description: 'A warm, earthy, and slightly bitter resin with medicinal and licorice-like facets.' },
+            { id: 'Benzoin', group: 3, isIngredient: true, description: 'A sweet, warm, and comforting balsamic resin with a vanilla-like character.' },
+            { id: 'Ambergris', group: 3, isIngredient: true, description: 'A rare material from sperm whales. Complex marine, salty, sweet, and animalic scent. Largely replaced by synthetics like Ambroxan.'},
+
+            { id: 'Sandalwood', group: 4, isIngredient: true, description: 'A creamy, milky, and soft precious wood note. Key molecules: alpha- and beta-Santalol.' },
+            { id: 'Cedarwood', group: 4, isIngredient: true, description: 'A dry, woody note reminiscent of pencil shavings and antique chests.' },
+            { id: 'Vetiver', group: 4, isIngredient: true, description: 'An earthy, rooty, and smoky note with green and nutty facets. Key molecules: Vetiverol, Nootkatone.' },
+            { id: 'Patchouli', group: 4, isIngredient: true, description: 'A dark, earthy, and woody note with camphoraceous and chocolate-like undertones.' },
+            { id: 'Oakmoss', group: 4, isIngredient: true, description: 'An earthy, inky, and bitter note. Key molecule: Evernyl (for modern accords).' },
+            { id: 'Birch Tar', group: 4, isIngredient: true, description: 'A potent, smoky, and phenolic note used to create leather and campfire effects.' },
+
+            { id: 'Vanilla', group: 5, isIngredient: true, description: 'A sweet, cozy, and comforting note. Key molecule: Vanillin.' },
+            { id: 'Tonka Bean', group: 5, isIngredient: true, description: 'A complex note with facets of vanilla, almond, cherry, and hay. Key molecule: Coumarin.' },
+            { id: 'Cinnamon', group: 5, isIngredient: true, description: 'A warm, sweet, and comforting spice note. Key molecule: Cinnamaldehyde.' },
+            { id: 'Cardamom', group: 5, isIngredient: true, description: 'A cool, aromatic, and slightly camphoraceous spice with a green-citrus lift.' },
+            { id: 'Cacao', group: 5, isIngredient: true, description: 'The rich, dark, and bitter scent of unprocessed chocolate.' },
+            { id: 'Edible Notes', group: 5, isIngredient: true, description: 'Unusual savory notes, often sulfuric or pyrazinic, evoking roasted nuts, popcorn, or rice.'},
+
+            { id: 'Aldehydes', group: 2, isIngredient: true, description: 'A class of synthetic molecules that give a sparkling, waxy, and abstract lift to floral notes.' },
+            { id: 'Iris', group: 2, isIngredient: true, description: 'From the root (orris). A sophisticated powdery, earthy, and woody note with floral (violet) facets. Key molecules: Irones.' },
+            { id: 'Pink Pepper', group: 5, isIngredient: true, description: 'A fresh, spicy note with a distinctly rosy, terpenic character that bridges spicy and fresh top notes.' },
+            { id: 'ISO E Super', group: 4, isIngredient: true, description: 'A hugely popular synthetic molecule with a smooth, velvety, and abstract woody-amber character.' },
+            { id: 'Hedione', group: 2, isIngredient: true, description: 'A radiant, transparent, and airy molecule with a luminous jasmine and citrus quality.' },
+
+            { id: 'Civet', group: 7, isIngredient: true, description: 'Intensely fecal and animalic note. Now always synthetic, it adds warmth and sensuality in trace amounts.'},
+            { id: 'Castoreum', group: 7, isIngredient: true, description: 'A leathery, smoky, and animalic note. Now always synthetic, used in leather and chypre fragrances.'},
+            { id: 'Honey', group: 7, isIngredient: true, description: 'A sweet, rich, and slightly animalic note that bridges the gourmand and animalic families.'},
+        ];
+        const initialLinks = [
+            ...initialNodes.filter(n => n.isSubFamily).map(n => ({ source: initialNodes.find(f => f.isFamily && f.group === n.group).id, target: n.id })),
+            ...initialNodes.filter(n => n.id === 'Animalic').map(n => ({ source: 'Animalic', target: 'Civet' })),
+            ...initialNodes.filter(n => n.id === 'Animalic').map(n => ({ source: 'Animalic', target: 'Castoreum' })),
+            ...initialNodes.filter(n => n.id === 'Animalic').map(n => ({ source: 'Animalic', target: 'Honey' })),
+
+            {source: 'Citrus', target: 'Bergamot'}, {source: 'Citrus', target: 'Grapefruit'},
+            {source: 'Fruity', target: 'Watermelon / Calone'},
+            {source: 'Green', target: 'Galbanum'}, {source: 'Green', target: 'Petitgrain'},
+            {source: 'Aromatic', target: 'Lavender'},
+            {source: 'Cooling', target: 'Mint'}, {source: 'Cooling', target: 'Eucalyptus'},
+            {source: 'Herbal', target: 'Mint'},
+            {source: 'White Floral', target: 'Jasmine Sambac'}, {source: 'White Floral', 'target': 'Tuberose'},
+            {source: 'Rose', target: 'Rose de Mai'}, {source: 'Rose', 'target': 'Geranium'}, {source: 'Soft Floral', target: 'Violet'},
+            {source: 'Soft Amber', target: 'Ambrette'}, {source: 'Soft Amber', 'target': 'Labdanum'}, {source: 'Soft Amber', target: 'Ambergris'},
+            {source: 'Resins', target: 'Frankincense'}, {source: 'Resins', 'target': 'Myrrh'},
+            {source: 'Balsamic', target: 'Benzoin'}, {source: 'Balsamic', 'target': 'Vanilla'},
+            {source: 'Woody', target: 'Sandalwood'}, {source: 'Woody', 'target': 'Cedarwood'}, {source: 'Woody', target: 'Vetiver'}, {source: 'Woody', target: 'Patchouli'},
+            {source: 'Dry Woods / Leather', target: 'Birch Tar'}, {source: 'Mossy Woods', 'target': 'Oakmoss'},
+            {source: 'Oudh', target: 'Sandalwood'},
+            {source: 'Sweet Notes', target: 'Vanilla'}, {source: 'Sweet Notes', 'target': 'Tonka Bean'},
+            {source: 'Spices', target: 'Cinnamon'}, {source: 'Spices', 'target': 'Cardamom'},
+            {source: 'Coffee & Chocolate', target: 'Cacao'},
+            {source: 'Savory', target: 'Edible Notes'},
+
+            {source: 'Geranium', target: 'Green'}, {source: 'Rose de Mai', 'target': 'Fruity'},
+            {source: 'Vetiver', target: 'Green'}, {source: 'Patchouli', 'target': 'Coffee & Chocolate'},
+            {source: 'Vanilla', target: 'Soft Amber'}, {source: 'Cardamom', 'target': 'Citrus'},
+            {source: 'Lavender', target: 'Soft Floral'}, {source: 'Sandalwood', 'target': 'Sweet Notes'},
+            {source: 'Tonka Bean', target: 'Woody'}, {source: 'Petitgrain', 'target': 'Citrus'},
+            {source: 'Jasmine Sambac', target: 'Green'}, {source: 'Frankincense', 'target': 'Citrus'},
+            {source: 'Watermelon / Calone', target: 'Water'},
+            {source: 'Soft Floral', target: 'Aldehydes'}, {source: 'Aldehydes', target: 'Citrus'},
+            {source: 'Soft Floral', 'target': 'Iris'}, {source: 'Iris', target: 'Woody'},
+            {source: 'Spices', target: 'Pink Pepper'}, {source: 'Pink Pepper', target: 'Citrus'},
+            {source: 'Dry Woods / Leather', target: 'ISO E Super'}, {source: 'Woody Amber', target: 'ISO E Super'},
+            {source: 'White Floral', target: 'Hedione'}, {source: 'Hedione', target: 'Citrus'}, {source: 'Hedione', target: 'Water'},
+
+            {source: 'Woody', target: 'Woody Amber', type: 'high-contrast' },
+            {source: 'Woody', target: 'Ambergris', type: 'high-contrast' },
+            {source: 'Ambergris', target: 'Labdanum', type: 'high-contrast' },
+            {source: 'Ambergris', target: 'Animalic', type: 'high-contrast' },
+            {source: 'Honey', target: 'Sweet Notes', type: 'high-contrast'},
+            {source: 'Iris', target: 'Violet', type: 'high-contrast'},
+            {source: 'Rose de Mai', target: 'Patchouli', type: 'high-contrast' },
+            {source: 'Grapefruit', target: 'Vetiver', type: 'high-contrast' },
+            {source: 'Lavender', target: 'Tonka Bean', type: 'high-contrast' },
+        ];
+
+        // --- SCRIPT START ---
+        window.onload = function() {
+            let nodes = JSON.parse(JSON.stringify(initialNodes));
+            let links = JSON.parse(JSON.stringify(initialLinks));
+            let linkStrength = 0.8;
+            let friction = 0.4; // Default friction value
+
+            const container = d3.select("#graph-container");
+            const tooltip = d3.select("#tooltip");
+            const contextMenu = d3.select("#context-menu");
+            const modal = d3.select("#modal-container");
+
+            if (container.node() === null) { return; }
+            const containerRect = container.node().getBoundingClientRect();
+            const width = containerRect.width;
+            const height = containerRect.height;
+
+            const svg = container.append("svg")
+                .attr("width", width)
+                .attr("height", height)
+                .attr("viewBox", [0, 0, width, height]);
+
+            const mainG = svg.append("g");
+
+            svg.on("contextmenu", (event) => {
+                 event.preventDefault();
+                 showBackgroundContextMenu(event);
+            });
+            svg.on("click", (event) => {
+                 if (event.target === svg.node()) {
+                    contextMenu.style("display", "none");
+                }
+            });
+
+            const linksG = mainG.append("g").attr("class", "links");
+            const nodesG = mainG.append("g").attr("class", "nodes");
+
+            let link, node;
+
+            const colorMap = {
+                1: '#B57EDC', 2: '#DC143C', 3: '#FFA500', 4: '#A0522D', 5: '#FF69B4', 6: '#778899', 7: '#684343',
+                'Citrus': '#ADFF2F', 'Green': '#228B22', 'Cooling': '#7FFFD4',
+            };
+
+            function getNodeColor(d) {
+                return d.customColor || colorMap[d.subGroup] || colorMap[d.group] || colorMap[6];
+            }
+
+            function getNodeRadius(d) {
+                switch(d.sizeCategory) {
+                    case 'big': return 28;
+                    case 'medium': return 18;
+                    case 'small': return 8;
+                    default: // Automatic sizing based on node type
+                        if (d.isFamily) return 28;
+                        if (d.isSubFamily) return 18;
+                        if (d.group === 6) return 14; // Custom floating node
+                        return 8; // Ingredient node
+                }
+            }
+
+            function getTextOffset(d) {
+                const radius = getNodeRadius(d);
+                if (radius >= 28) return `${radius + 16}px`;
+                if (radius >= 18) return `${radius + 12}px`;
+                return `${radius + 10}px`;
+            }
+
+            function getNodeCollisionRadius(d) {
+                const baseRadius = getNodeRadius(d);
+                if (baseRadius >= 28) return baseRadius + 7;
+                if (baseRadius >= 18) return baseRadius + 4;
+                return baseRadius + 2;
+            }
+
+            function setInitialPositions() {
+                const mainFamilies = ['Fresh', 'Floral', 'Amber', 'Woody', 'Gourmand'];
+                const numFamilies = mainFamilies.length;
+                const radius = Math.min(width, height) / 3;
+                const centerX = width / 2;
+                const centerY = height / 2;
+
+                nodes.forEach(n => {
+                    if (n.isFamily) {
+                        if (mainFamilies.includes(n.id)) {
+                            const familyIndex = mainFamilies.indexOf(n.id);
+                            const angle = (2 * Math.PI / numFamilies) * familyIndex - (Math.PI / 2);
+                            n.fx = centerX + radius * Math.cos(angle);
+                            n.fy = centerY + radius * Math.sin(angle);
+                        } else if (n.id === 'Animalic') {
+                            n.fx = width * 0.9;
+                            n.fy = height * 0.9;
+                        }
+                    }
+                });
+            }
+            setInitialPositions();
+
+            const linkForce = d3.forceLink(links).id(d => d.id)
+                .distance(d => d.source.isFamily ? 180 : (d.source.isSubFamily ? 90 : 40))
+                .strength(d => (d.type === 'high-contrast' ? 0.2 : 1) * linkStrength);
+
+            const simulation = d3.forceSimulation(nodes)
+                .force("link", linkForce)
+                .force("charge", d3.forceManyBody().strength(-350))
+                .force("center", d3.forceCenter(width / 2, height / 2))
+                .force("collide", d3.forceCollide().radius(d => getNodeCollisionRadius(d)).strength(1))
+                .velocityDecay(friction);
+
+            let connectingNode = null;
+            let lastClickCoords = {x: 0, y: 0};
+
+            const importFileInput = document.getElementById('import-file');
+
+            const zoom = d3.zoom().scaleExtent([0.1, 7])
+                .on("start", () => contextMenu.style("display", "none"))
+                .on("zoom", (event) => {
+                    mainG.attr("transform", event.transform);
+                });
+
+            svg.call(zoom).on("dblclick.zoom", null);
+
+            function drag(sim) {
+                function dragstarted(event, d) {
+                    if (!event.active) sim.alphaTarget(0.3).restart();
+                    d.fx = event.x; d.fy = event.y;
+                    tooltip.style("opacity", 0);
+                    contextMenu.style("display", "none");
+                }
+                function dragged(event, d) { d.fx = event.x; d.fy = event.y; }
+                function dragended(event, d) {
+                     if (!event.active) sim.alphaTarget(0);
+                     if (!d.pinned) {
+                         d.fx = null;
+                         d.fy = null;
+                     }
+                }
+                return d3.drag().on("start", dragstarted).on("drag", dragged).on("end", dragended);
+            }
+
+            function update() {
+                node = nodesG.selectAll('g.node').data(nodes, d => d.id)
+                    .join(enter => {
+                        const g = enter.append('g').attr('class', 'node');
+                        g.append('circle');
+                        g.append('text');
+                        return g;
+                    });
+
+                node.select('circle')
+                    .attr('r', d => getNodeRadius(d))
+                    .attr('fill', d => getNodeColor(d))
+                    .attr('stroke', d => d.outlineColor || (d.group === 6 ? 'black' : 'white'));
+
+                node.select('text')
+                    .attr('dy', d => getTextOffset(d))
+                    .text(d => d.id)
+                    .classed('ingredient-label', d => d.isIngredient);
+
+                node.call(drag(simulation)).on('click', handleNodeClick).on('dblclick', handleNodeDblClick).on('contextmenu', handleNodeContextMenu).on('mouseover', handleMouseOver).on('mouseout', handleMouseOut);
+
+                link = linksG.selectAll('line.link').data(links, d => `${d.source.id}-${d.target.id}`)
+                    .join('line').attr('class', 'link').attr('stroke', '#9ca3af').classed('high-contrast', d => d.type === 'high-contrast')
+                    .on('click', handleLinkClick).on('mouseover', handleLinkMouseOver).on('mouseout', handleMouseOut);
+
+                nodesG.selectAll('g.node').each(function() { this.parentNode.appendChild(this); });
+
+                simulation.nodes(nodes);
+                simulation.force('link').links(links);
+                simulation.alpha(1).restart();
+                updateSearchList();
+            }
+
+            simulation.on("tick", () => {
+                 nodes.forEach(d => {
+                    if (d.group === 6 && !d.fx) {
+                        d.vx *= 0.8;
+                        d.vy *= 0.8;
+                    }
+                });
+                link?.attr("x1", d => d.source.x).attr("y1", d => d.source.y).attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+                node?.attr("transform", d => `translate(${d.x},${d.y})`);
+            });
+
+            function handleMouseOver(event, d) {
+                tooltip.style("opacity", 1).html(d.description || d.id).style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px");
+            }
+            function handleLinkMouseOver(event, d) {
+                if (d.description) {
+                   tooltip.style("opacity", 1).html(d.description).style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px");
+                }
+            }
+            function handleMouseOut() { tooltip.style("opacity", 0); }
+
+            function handleNodeClick(event, d) {
+                event.stopPropagation();
+                contextMenu.style("display", "none");
+                if (connectingNode) {
+                    if (connectingNode.id !== d.id) {
+                        links.push({ source: connectingNode, target: d });
+                        update();
+                    }
+                    connectingNode = null;
+                }
+            }
+
+            function handleNodeContextMenu(event, d) {
+                 event.preventDefault();
+                 event.stopPropagation();
+                 showContextMenu(event, d);
+            }
+
+            function handleLinkClick(event, d) {
+                event.stopPropagation();
+                showLinkContextMenu(event, d);
+            }
+
+            function handleNodeDblClick(event, d) {
+                event.stopPropagation();
+                if (d.fx !== null || d.fy !== null) {
+                    d.fx = null;
+                    d.fy = null;
+                    d.pinned = false;
+                    simulation.alpha(0.3).restart();
+                } else if (d.isIngredient || d.group === 6) {
+                     renameNode(d);
+                }
+            }
+
+            function showBackgroundContextMenu(event) {
+                lastClickCoords = d3.pointer(event, mainG.node());
+                contextMenu.html(`<button id="add-floating-node-btn">Add New Node</button><button id="call-node-btn">Call Node Here...</button>`)
+                    .style("display", "flex")
+                    .style("left", `${event.pageX}px`)
+                    .style("top", `${event.pageY}px`);
+
+                d3.select('#add-floating-node-btn').on('click', () => {
+                    addNewNode(null, lastClickCoords);
+                    contextMenu.style("display", "none");
+                });
+                d3.select('#call-node-btn').on('click', () => {
+                    callNode(lastClickCoords);
+                    contextMenu.style("display", "none");
+                });
+            }
+
+            function showContextMenu(event, d) {
+                contextMenu.html(`
+                    <button id="connect-btn">Connect...</button>
+                    <button id="pin-node-btn">${d.pinned ? 'Unpin Node' : 'Pin Node'}</button>
+                    <button id="add-child-btn">Add Child Note</button>
+                    <button id="rename-node-btn">Rename</button>
+                    <button id="edit-desc-btn">Edit Description</button>
+                    <button id="set-color-btn">Set Color</button>
+                    <button id="set-size-btn">Set Size</button>
+                    <button id="toggle-outline-btn">Toggle Outline</button>
+                    <button id="delete-node-btn" class="text-red-600">Delete Node</button>
+                `)
+                .style("display", "flex")
+                .style("left", `${event.pageX}px`)
+                .style("top", `${event.pageY}px`);
+
+                d3.select('#connect-btn').on('click', () => { connectingNode = d; contextMenu.style('display', 'none'); });
+                d3.select('#pin-node-btn').on('click', () => { d.pinned = !d.pinned; if (d.pinned) { d.fx = d.x; d.fy = d.y; } else { d.fx = null; d.fy = null; simulation.alpha(0.3).restart(); } contextMenu.style('display', 'none'); });
+                d3.select('#add-child-btn').on('click', () => { addNewNode(d); contextMenu.style('display', 'none'); });
+                d3.select('#rename-node-btn').on('click', () => { renameNode(d); contextMenu.style('display', 'none'); });
+                d3.select('#edit-desc-btn').on('click', () => { editNodeDescription(d); contextMenu.style('display', 'none'); });
+                d3.select('#set-color-btn').on('click', () => { setNodeColor(d); contextMenu.style('display', 'none'); });
+                d3.select('#set-size-btn').on('click', () => { setNodeSize(d); contextMenu.style('display', 'none'); });
+                d3.select('#toggle-outline-btn').on('click', () => {
+                    const isUserNode = d.group === 6;
+                    const currentDefault = isUserNode ? 'black' : 'white';
+                    const currentOutline = d.outlineColor || currentDefault;
+                    d.outlineColor = currentOutline === 'white' ? 'black' : 'white';
+                    update();
+                    contextMenu.style('display', 'none');
+                });
+                d3.select('#delete-node-btn').on('click', () => { deleteNode(d); contextMenu.style('display', 'none'); });
+            }
+
+            function showLinkContextMenu(event, d) {
+                contextMenu.html(`
+                    <button id="edit-link-desc-btn">Edit Description</button>
+                    <button id="delete-link-btn" class="text-red-600">Delete Connection</button>
+                `)
+                .style("display", "flex")
+                .style("left", `${event.pageX}px`)
+                .style("top", `${event.pageY}px`);
+
+                d3.select('#edit-link-desc-btn').on('click', () => { editLinkDescription(d); contextMenu.style('display', 'none'); });
+                d3.select('#delete-link-btn').on('click', () => { links = links.filter(l => l !== d); update(); contextMenu.style('display', 'none'); });
+            }
+
+            function showModal(title, body, footer) {
+                modal.html(`
+                    <div class="modal-content">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">${title}</h3>
+                        <div>${body}</div>
+                        <div class="mt-6 flex justify-end gap-3">${footer}</div>
+                    </div>
+                `);
+                modal.classed('hidden', false);
+            }
+            function hideModal() { modal.classed('hidden', true); }
+
+            function showHelpModal() {
+                 const helpBody = `
+                    <div class="text-sm text-gray-700 help-content">
+                        <h4 class="font-bold text-base text-gray-800 mb-2">Basics</h4>
+                        <ul>
+                            <li><b>Pan:</b> Click and drag on the empty background to move around the map.</li>
+                            <li><b>Zoom:</b> Use your mouse wheel or the +/- buttons in the header to zoom in and out.</li>
+                            <li><b>Move Nodes:</b> Click and drag any node to reposition it.</li>
+                            <li><b>Tooltips:</b> Hover over any node or link to see its description.</li>
+                        </ul>
+                        <h4 class="font-bold text-base text-gray-800 mb-2 mt-4">Working with Nodes</h4>
+                        <ul>
+                            <li><b>Context Menu:</b> Right-click a node to see all options.</li>
+                            <li><b>Quick Rename:</b> Double-click a custom node or ingredient to rename it.</li>
+                            <li><b>Pin/Unpin:</b> Pin a node from its context menu to lock its position. Dragging a node also pins it. Double-click a pinned node to unpin it.</li>
+                            <li><b>Connect:</b> Select 'Connect' from a node's menu, then click another node to create a link.</li>
+                            <li><b>Add Child Note:</b> Creates a new custom node linked to the selected one.</li>
+                            <li><b>Customization:</b> Use the context menu to set a custom color, size, description, or outline color for any node.</li>
+                            <li><b>Delete Node:</b> Permanently removes the node and its connections.</li>
+                        </ul>
+                        <h4 class="font-bold text-base text-gray-800 mb-2 mt-4">Canvas & Connections</h4>
+                        <ul>
+                             <li><b>Right-Click Canvas:</b> Right-click empty space to 'Add New Node' at that spot or 'Call Node Here...' to move an existing node to your cursor.</li>
+                            <li><b>Edit Connections:</b> Click a connection line to add a description or delete it.</li>
+                        </ul>
+                         <h4 class="font-bold text-base text-gray-800 mb-2 mt-4">Header Controls</h4>
+                        <ul>
+                            <li><b>Search:</b> Quickly find any node on the map. Selecting a result zooms to that node.</li>
+                            <li><b>Elasticity:</b> Controls the "springiness" of connections. Lower values are looser, higher values are tighter.</li>
+                            <li><b>Friction:</b> Controls how quickly nodes stop moving. Higher values increase drag, making them stop sooner.</li>
+                            <li><b>Import/Export:</b> Save your entire map (including custom nodes, colors, and positions) as a file, or load a previously saved map.</li>
+                             <li><b>Reset:</b> Reverts the map to its original state. <strong>Warning:</strong> This deletes all your custom changes.</li>
+                        </ul>
+                    </div>
+                `;
+                showModal('Help & Advanced Usage', helpBody, `<button id="close-help" class="px-4 py-2 bg-blue-600 text-white rounded">Got it!</button>`);
+                d3.select('#close-help').on('click', hideModal);
+            }
+
+            function addNewNode(parentNode, coords) {
+                showModal('Add New Node',
+                    `<input type="text" id="new-node-name" class="w-full p-2 border rounded" placeholder="Note Name">
+                     <textarea id="new-node-desc" class="w-full p-2 border rounded mt-2" placeholder="Description..."></textarea>`,
+                    `<button id="cancel-add" class="px-4 py-2 bg-gray-200 rounded">Cancel</button>
+                     <button id="confirm-add" class="px-4 py-2 bg-teal-600 text-white rounded">Add</button>`
+                );
+                d3.select('#cancel-add').on('click', hideModal);
+                d3.select('#confirm-add').on('click', () => {
+                    const name = document.getElementById('new-node-name').value.trim();
+                    const desc = document.getElementById('new-node-desc').value.trim();
+                    if (name && !nodes.some(n => n.id === name)) {
+                        const newNode = { id: name, description: desc, group: 6 };
+                        if (coords) {
+                            newNode.x = coords[0];
+                            newNode.y = coords[1];
+                        } else if (parentNode) {
+                            newNode.x = parentNode.x + Math.random()*20-10;
+                            newNode.y = parentNode.y + Math.random()*20-10;
+                        }
+                        nodes.push(newNode);
+                        if (parentNode) {
+                            links.push({ source: parentNode, target: newNode });
+                        }
+                        update();
+                    }
+                    hideModal();
+                });
+            }
+
+            function callNode(coords) {
+                 showModal('Call Node Here',
+                    `<input type="text" id="call-search-input" class="w-full p-2 border rounded" placeholder="Search for a node...">
+                     <div id="call-search-results" class="border border-gray-200 rounded-b-md max-h-40 overflow-y-auto"></div>`,
+                    `<button id="cancel-call" class="px-4 py-2 bg-gray-200 rounded">Cancel</button>`
+                );
+
+                const callSearchInput = d3.select('#call-search-input');
+                const callSearchResults = d3.select('#call-search-results');
+
+                function updateCallList() {
+                    const searchTerm = callSearchInput.property('value').toLowerCase();
+                    const filteredNodes = nodes.filter(n => n.id.toLowerCase().includes(searchTerm));
+
+                    callSearchResults.html('');
+                    filteredNodes.forEach(n => {
+                        callSearchResults.append('div')
+                            .attr('class', 'p-2 hover:bg-gray-100 cursor-pointer')
+                            .text(n.id)
+                            .on('click', () => {
+                                n.fx = coords[0];
+                                n.fy = coords[1];
+                                n.pinned = true;
+                                simulation.alpha(0.3).restart();
+                                hideModal();
+                            });
+                    });
+                }
+
+                callSearchInput.on('input', updateCallList);
+                d3.select('#cancel-call').on('click', hideModal);
+                updateCallList();
+            }
+
+
+            function renameNode(d) {
+                showModal('Rename Note',
+                    `<input type="text" id="rename-node-input" class="w-full p-2 border rounded" value="${d.id}">`,
+                    `<button id="cancel-rename" class="px-4 py-2 bg-gray-200 rounded">Cancel</button>
+                     <button id="confirm-rename" class="px-4 py-2 bg-teal-600 text-white rounded">Save</button>`
+                );
+                d3.select('#cancel-rename').on('click', hideModal);
+                d3.select('#confirm-rename').on('click', () => {
+                    const newName = document.getElementById('rename-node-input').value.trim();
+                    if (newName && !nodes.some(n => n.id === newName)) {
+                        d.id = newName;
+                        update();
+                    }
+                    hideModal();
+                });
+            }
+
+             function editNodeDescription(d) {
+                showModal('Edit Description',
+                    `<textarea id="node-desc-input" class="w-full p-2 border rounded h-24" placeholder="Describe this note...">${d.description || ''}</textarea>`,
+                    `<button id="cancel-node-desc-edit" class="px-4 py-2 bg-gray-200 rounded">Cancel</button>
+                     <button id="confirm-node-desc-edit" class="px-4 py-2 bg-teal-600 text-white rounded">Save</button>`
+                );
+                d3.select('#cancel-node-desc-edit').on('click', hideModal);
+                d3.select('#confirm-node-desc-edit').on('click', () => {
+                    d.description = document.getElementById('node-desc-input').value.trim();
+                    hideModal();
+                });
+            }
+
+            function setNodeSize(d) {
+                showModal('Set Node Size',
+                    `<div class="flex justify-around gap-2 flex-wrap">
+                        <button id="set-size-big" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-md grow shadow-sm">Big</button>
+                        <button id="set-size-medium" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-md grow shadow-sm">Medium</button>
+                        <button id="set-size-small" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-md grow shadow-sm">Small</button>
+                     </div>
+                     <div class="mt-4">
+                         <button id="set-size-default" class="w-full px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white font-semibold rounded-md shadow-sm">Reset to Default</button>
+                     </div>
+                    `,
+                    `<button id="cancel-size" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-md">Cancel</button>`
+                );
+
+                d3.select('#set-size-big').on('click', () => { d.sizeCategory = 'big'; update(); hideModal(); });
+                d3.select('#set-size-medium').on('click', () => { d.sizeCategory = 'medium'; update(); hideModal(); });
+                d3.select('#set-size-small').on('click', () => { d.sizeCategory = 'small'; update(); hideModal(); });
+                d3.select('#set-size-default').on('click', () => { delete d.sizeCategory; update(); hideModal(); });
+                d3.select('#cancel-size').on('click', hideModal);
+            }
+
+             function setNodeColor(d) {
+                const palette = ['#d62828', '#f77f00', '#fcbf49', '#f9c74f', '#ecf39e', '#bcf60c', '#90a955', '#4f772d', '#2ec4b6', '#a9d6e5', '#89c2d9', '#468faf', '#0077b6', '#01497c', '#023e8a', '#560bad', '#7209b7', '#b5179e', '#f72585', '#e5989b', '#b5838d', '#6d6875', '#a9a9a9', '#ffffff', '#000000'];
+                const paletteHtml = palette.map(c => `<div class="color-swatch" style="background-color: ${c}" data-color="${c}"></div>`).join('');
+
+                showModal('Set Node Color', `
+                    <div class="color-palette">${paletteHtml}</div>
+                    <input type="text" id="color-hex-input" class="w-full p-2 border rounded" placeholder="#AABBCC">
+                `,
+                `<button id="cancel-color" class="px-4 py-2 bg-gray-200 rounded">Cancel</button>
+                 <button id="confirm-color" class="px-4 py-2 bg-teal-600 text-white rounded">Set Color</button>`
+                );
+
+                d3.selectAll('.color-swatch').on('click', function() {
+                    d3.select('#color-hex-input').property('value', d3.select(this).attr('data-color'));
+                });
+
+                d3.select('#cancel-color').on('click', hideModal);
+                d3.select('#confirm-color').on('click', () => {
+                    const newColor = d3.select('#color-hex-input').property('value');
+                    if (/^#[0-9A-F]{6}$/i.test(newColor)) {
+                        d.customColor = newColor;
+                        update();
+                    }
+                    hideModal();
+                });
+            }
+
+            function deleteNode(d) {
+                nodes = nodes.filter(n => n.id !== d.id);
+                links = links.filter(l => l.source.id !== d.id && l.target.id !== d.id);
+                update();
+            }
+
+            function editLinkDescription(d) {
+                showModal('Edit Connection',
+                    `<textarea id="link-desc-input" class="w-full p-2 border rounded" placeholder="Describe this relationship...">${d.description || ''}</textarea>`,
+                    `<button id="cancel-link-edit" class="px-4 py-2 bg-gray-200 rounded">Cancel</button>
+                     <button id="confirm-link-edit" class="px-4 py-2 bg-teal-600 text-white rounded">Save</button>`
+                );
+                d3.select('#cancel-link-edit').on('click', hideModal);
+                d3.select('#confirm-link-edit').on('click', () => {
+                    d.description = document.getElementById('link-desc-input').value.trim();
+                    hideModal();
+                });
+            }
+
+            function updateSearchList() {
+                const searchTerm = d3.select('#search-input').property('value').toLowerCase();
+                const searchResultsContainer = d3.select('#search-results');
+
+                if (searchTerm.length === 0) {
+                    searchResultsContainer.classed('hidden', true);
+                    return;
+                }
+
+                const filteredNodes = nodes.filter(n => n.id.toLowerCase().includes(searchTerm));
+
+                searchResultsContainer.html('');
+                if (filteredNodes.length > 0) {
+                    searchResultsContainer.classed('hidden', false);
+                    filteredNodes.forEach(n => {
+                        searchResultsContainer.append('div')
+                            .attr('class', 'p-2 hover:bg-gray-100 cursor-pointer')
+                            .text(n.id)
+                            .on('click', () => {
+                                locateNode(n);
+                                searchResultsContainer.classed('hidden', true);
+                                d3.select('#search-input').property('value', '');
+                            });
+                    });
+                } else {
+                    searchResultsContainer.classed('hidden', true);
+                }
+            }
+
+            function locateNode(nodeToFind) {
+                const t = d3.zoomIdentity.translate(width/2, height/2).scale(2).translate(-nodeToFind.x, -nodeToFind.y);
+                svg.transition().duration(750).call(zoom.transform, t);
+            }
+
+            // --- EVENT LISTENERS ---
+            d3.select('#help-btn').on('click', showHelpModal);
+
+            d3.select('#search-input').on('input', updateSearchList);
+            d3.select('body').on('click', () => {
+                 d3.select('#search-results').classed('hidden', true);
+                 contextMenu.style("display", "none");
+            });
+
+            d3.select('#elasticity-slider').on('input', function() {
+                linkStrength = +this.value;
+                linkForce.strength(d => (d.type === 'high-contrast' ? 0.2 : 1) * linkStrength);
+                simulation.alpha(0.3).restart();
+            });
+
+            d3.select('#friction-slider').on('input', function() {
+                friction = +this.value;
+                simulation.velocityDecay(friction).alpha(0.3).restart();
+            });
+
+            document.getElementById('export-btn').addEventListener('click', () => {
+                 const data = {
+                    nodes: nodes.map(({ id, group, subGroup, description, customColor, isFamily, isSubFamily, isIngredient, x, y, fx, fy, sizeCategory, pinned, outlineColor }) => ({ id, group, subGroup, description, customColor, isFamily, isSubFamily, isIngredient, x, y, fx, fy, sizeCategory, pinned, outlineColor })),
+                    links: links.map(({ source, target, type, description }) => ({ source: source.id || source, target: target.id || target, type, description })),
+                    settings: { linkStrength, friction }
+                };
+                const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(data, null, 2));
+                const downloadAnchorNode = document.createElement('a');
+                downloadAnchorNode.setAttribute("href", dataStr);
+                downloadAnchorNode.setAttribute("download", "fragrance-map.json");
+                document.body.appendChild(downloadAnchorNode);
+                downloadAnchorNode.click();
+                downloadAnchorNode.remove();
+            });
+            document.getElementById('import-btn').addEventListener('click', () => importFileInput.click());
+            importFileInput.addEventListener('change', (event) => {
+                 const file = event.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    try {
+                        const data = JSON.parse(e.target.result);
+                        if (data && data.nodes && data.links) {
+                            nodes = data.nodes;
+                            links = data.links;
+                            if(data.settings) {
+                                if (data.settings.linkStrength) {
+                                    linkStrength = data.settings.linkStrength;
+                                    d3.select('#elasticity-slider').property('value', linkStrength);
+                                    linkForce.strength(d => (d.type === 'high-contrast' ? 0.2 : 1) * linkStrength);
+                                }
+                                if (data.settings.friction) {
+                                    friction = data.settings.friction;
+                                    d3.select('#friction-slider').property('value', friction);
+                                    simulation.velocityDecay(friction);
+                                }
+                            }
+                            update();
+                        } else { alert("Invalid JSON file format."); }
+                    } catch (error) { alert("Error parsing JSON file: " + error.message); }
+                };
+                reader.readAsText(file);
+                event.target.value = '';
+            });
+
+            document.getElementById('reset-btn').addEventListener('click', () => {
+                nodes = JSON.parse(JSON.stringify(initialNodes));
+                links = JSON.parse(JSON.stringify(initialLinks));
+                setInitialPositions();
+                linkStrength = 0.8;
+                friction = 0.4;
+                d3.select('#elasticity-slider').property('value', linkStrength);
+                d3.select('#friction-slider').property('value', friction);
+                linkForce.strength(d => (d.type === 'high-contrast' ? 0.2 : 1) * linkStrength);
+                simulation.velocityDecay(friction);
+                svg.transition().duration(750).call(zoom.transform, d3.zoomIdentity);
+                update();
+            });
+
+            d3.select('#zoom-in-btn').on('click', () => svg.transition().duration(250).call(zoom.scaleBy, 1.3));
+            d3.select('#zoom-out-btn').on('click', () => svg.transition().duration(250).call(zoom.scaleBy, 1 / 1.3));
+
+            update();
+
+            window.addEventListener('resize', () => {
+                const newRect = container.node().getBoundingClientRect();
+                svg.attr('width', newRect.width).attr('height', newRect.height).attr('viewBox', [0, 0, newRect.width, newRect.height]);
+                simulation.force('center', d3.forceCenter(newRect.width / 2, newRect.height / 2)).alpha(0.3).restart();
+            });
+        };
+    </script>
+</body>
+</html>
